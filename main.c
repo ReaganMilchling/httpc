@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -15,6 +16,7 @@
 #define BACKLOG 10
 #define MAXSIZE 2048
 #define PATHMAX 512
+#define MAXFILESIZE 4096
 
 void *get_in_addr(struct sockaddr *sa)
 {
@@ -23,6 +25,33 @@ void *get_in_addr(struct sockaddr *sa)
     }
 
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+bool is_home_dir(const char* dir)
+{
+    puts(dir);
+    if (dir[0] == '/' && dir[1] == '\0') return true;
+    return false;
+}
+
+void read_file(char* buffer, const char* file_path)
+{
+    FILE* file = fopen(file_path, "rb");
+
+    if (file != NULL)
+    {
+        fseek(file, 0, SEEK_END);
+        long len = ftell(file);
+        fseek(file, 0, SEEK_SET);
+
+        buffer = malloc(len);
+
+        if (buffer)
+        {
+            fread(buffer, 1, len, file);
+        }
+        fclose(file);
+    }
 }
 
 int main(void)
@@ -35,7 +64,12 @@ int main(void)
         return(EXIT_FAILURE);
     }
 
+    char* file = 0;
+
     char buffer[MAXSIZE] = { 0 };
+    char ptcl[10];
+    char path[PATHMAX];
+    char end[100];
     char connecting_addr[INET6_ADDRSTRLEN];
     char ip4[INET_ADDRSTRLEN] = "127.0.0.1";
 
@@ -86,29 +120,61 @@ whileLoop: while(1) {
             perror("Read error: ");
             goto whileLoop;
         }
-        else 
-        {
-            printf("Processing new request: \n");
-            buffer[bytes_read] = '\0';
-            puts(buffer);
-        }
 
         inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), connecting_addr, sizeof connecting_addr);
-        printf("server: got connection from %s\n", connecting_addr);
 
-        char *tmp = "HTTP/1.1 200 OK\r\n"
-                         "Content-Type: text/html; charset=UTF-8\r\n\r\n"
-                         "<!DOCTYPE html>\r\n"
-                         "<html>\r\n"
-                         "<head>\r\n"
-                         "<title>Httpc</title>\r\n"
-                         "</head>\r\n"
-                         "<body>Hello Reagan</body>\r\n"
-                         "</html>\r\n";
-        send(new_socket, tmp, strlen(tmp), 0);
+        buffer[bytes_read] = '\0';
+
+        const char* start = buffer;
+        int ptcl_index = 0;
+        const char* path_start = strchr(buffer, '/');
+        int path_index = 0;
+        const char* end_start = strchr(path_start, ' ');
+
+        while (start != path_start)
+        {
+            ptcl[ptcl_index++] = *start;
+            start++;
+        }
+        ptcl[ptcl_index] = '\0';
+
+        while (path_start != end_start)
+        {
+            path[path_index++] = *path_start;
+            path_start++;
+        }
+        path[path_index] = '\0';
+
+
+        printf("Received req: \"%s %s\" from %s\n", ptcl, path, connecting_addr);
+
+        if (is_home_dir(path))
+        {
+            printf("defaulting to index.html");
+            read_file(file, "/index.html");
+        }
+        else
+        {
+            read_file(file, path);
+        }
+
+        char *tmp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n";
+        if (!file)
+        {
+            perror("could not open file");
+            goto whileLoop;
+        }
+
+        send(new_socket, file, strlen(file), 0);
+        //send(new_socket, tmp, strlen(tmp), 0);
 
         close(new_socket);
         memset(buffer, 0, MAXSIZE);
+        memset(ptcl, 0, 10);
+        memset(path, 0, PATHMAX);
+        memset(end, 0, 100);
+        free(file);
+        file = 0;
     }
 
     freeaddrinfo(server_info);
