@@ -29,29 +29,45 @@ void *get_in_addr(struct sockaddr *sa)
 
 bool is_home_dir(const char* dir)
 {
-    puts(dir);
-    if (dir[0] == '/' && dir[1] == '\0') return true;
+    if (dir[0] == '\0') return true;
     return false;
 }
 
-void read_file(char* buffer, const char* file_path)
+char* read_file(const char* file_path)
 {
     FILE* file = fopen(file_path, "rb");
 
     if (file != NULL)
     {
-        fseek(file, 0, SEEK_END);
-        long len = ftell(file);
-        fseek(file, 0, SEEK_SET);
-
-        buffer = malloc(len);
-
-        if (buffer)
+        char* buffer = NULL;
+        if (fseek(file, 0L, SEEK_END) == 0)
         {
-            fread(buffer, 1, len, file);
+            long len = ftell(file);
+            if (fseek(file, 0L, SEEK_SET) != 0)
+            {
+                printf("failed to seek to start\n");
+            }
+
+            buffer = malloc(sizeof(char) * (len+1));
+
+            int s = fread(buffer, sizeof(char), len, file);
+            if (ferror(file))
+            {
+                perror("file failed to load");
+            }
+            else 
+            {
+                buffer[s] = '\0';
+            }
+        }
+        else {
+            printf("failed to seek\n");
         }
         fclose(file);
+        return buffer;
     }
+    printf("File was null\n");
+    return NULL;
 }
 
 int main(void)
@@ -63,8 +79,6 @@ int main(void)
         perror("getcwd() error");
         return(EXIT_FAILURE);
     }
-
-    char* file = 0;
 
     char buffer[MAXSIZE] = { 0 };
     char ptcl[10];
@@ -137,6 +151,7 @@ whileLoop: while(1) {
             start++;
         }
         ptcl[ptcl_index] = '\0';
+        path_start++;
 
         while (path_start != end_start)
         {
@@ -145,36 +160,70 @@ whileLoop: while(1) {
         }
         path[path_index] = '\0';
 
+        printf("Request:%s:%s:%s\n", ptcl, path, connecting_addr);
 
-        printf("Received req: \"%s %s\" from %s\n", ptcl, path, connecting_addr);
-
+        char* file_text;
         if (is_home_dir(path))
         {
             printf("defaulting to index.html");
-            read_file(file, "/index.html");
+            file_text = read_file("index.html");
         }
         else
         {
-            read_file(file, path);
+            file_text = read_file(path);
         }
 
-        char *tmp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n";
-        if (!file)
+        if (file_text == NULL)
         {
-            perror("could not open file");
-            goto whileLoop;
+            char *fail = "HTTP/1.1 404 Not found\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n\
+<HTML><HEAD><TITLE>File not found</TITLE></HEAD><BODY><H2>File not found</H2></BODY></HTML>";
+            printf("Serving 404\n");
+            send(new_socket, fail, strlen(fail), 0);
         }
+        else
+        {
+            int index = 0;
+            char * mime;
+            const char* extension = strchr(path, '.');
+            printf("extension:%s\n", extension);
+            if (strcmp(extension, ".css") == 0) {
+                mime = "text/css";
+            } else if (strcmp(extension, ".html") == 0 || strcmp(extension, ".htm") == 0) {
+                mime = "text/html";
+            } else if (strcmp(extension, ".webp") == 0) {
+                mime = "text/webp";
+            } else if (strcmp(extension, ".csv") == 0) {
+                mime = "text/csv";
+            } else if (strcmp(extension, ".json") == 0) {
+                mime = "application/json";
+            } else if (strcmp(extension, ".jpeg") == 0 || strcmp(extension, ".jpg") == 0) {
+                mime = "image/jpeg";
+            } else if (strcmp(extension, ".gif") == 0) {
+                mime = "image/gif";
+            } else if (strcmp(extension, ".png") == 0) {
+                mime = "image/png";
+            } else {
+                mime = "text/plain";
+            }
 
-        send(new_socket, file, strlen(file), 0);
-        //send(new_socket, tmp, strlen(tmp), 0);
+            char *tmp = "HTTP/1.1 200 OK\r\nContent-Type: "; 
+            char *follow = ";\r\n\r\n";
+            char* response = malloc(strlen(tmp) + strlen(file_text) + strlen(mime) + strlen(follow) + 1);
+            strcpy(response, tmp);
+            strcat(response, mime);
+            strcat(response, follow);
+            strcat(response, file_text);
+            printf("Serving:content length-%li:Mime-%s\n", strlen(response), mime);
+            send(new_socket, response, strlen(response), 0);
+            if (file_text != NULL) free(file_text);
+            if (response != NULL) free(response);
+        }
 
         close(new_socket);
         memset(buffer, 0, MAXSIZE);
         memset(ptcl, 0, 10);
         memset(path, 0, PATHMAX);
         memset(end, 0, 100);
-        free(file);
-        file = 0;
     }
 
     freeaddrinfo(server_info);
