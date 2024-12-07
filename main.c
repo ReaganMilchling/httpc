@@ -33,41 +33,38 @@ bool is_home_dir(const char* dir)
     return false;
 }
 
-char* read_file(const char* file_path)
+long read_file(char** buffer, const char* file_path)
 {
+    long len = 0L;
     FILE* file = fopen(file_path, "rb");
 
     if (file != NULL)
     {
-        char* buffer = NULL;
         if (fseek(file, 0L, SEEK_END) == 0)
         {
-            long len = ftell(file);
+            len = ftell(file);
             if (fseek(file, 0L, SEEK_SET) != 0)
             {
                 printf("failed to seek to start\n");
             }
 
-            buffer = malloc(sizeof(char) * (len+1));
+            *buffer = calloc(len, sizeof(char));
 
-            int s = fread(buffer, sizeof(char), len, file);
+            int s = fread(*buffer, sizeof(char), len, file);
             if (ferror(file))
             {
                 perror("file failed to load");
-            }
-            else 
-            {
-                buffer[s] = '\0';
             }
         }
         else {
             printf("failed to seek\n");
         }
         fclose(file);
-        return buffer;
+        printf("file size:%ld\n", len);
+        return len;
     }
     printf("File was null\n");
-    return NULL;
+    return len;
 }
 
 int main(void)
@@ -160,20 +157,18 @@ whileLoop: while(1) {
         }
         path[path_index] = '\0';
 
-        printf("Request:%s:%s:%s\n", ptcl, path, connecting_addr);
+        printf("\nRequest:%s:%s:%s\n", ptcl, path, connecting_addr);
 
-        char* file_text;
         if (is_home_dir(path))
         {
-            printf("defaulting to index.html");
-            file_text = read_file("index.html");
-        }
-        else
-        {
-            file_text = read_file(path);
+            printf("defaulting to index.html\n");
+            memcpy(path, "index.html\0", 11);
         }
 
-        if (file_text == NULL)
+        char* file_data;
+        long file_len = read_file(&file_data, path);
+
+        if (file_data == NULL)
         {
             char *fail = "HTTP/1.1 404 Not found\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n\
 <HTML><HEAD><TITLE>File not found</TITLE></HEAD><BODY><H2>File not found</H2></BODY></HTML>";
@@ -185,7 +180,6 @@ whileLoop: while(1) {
             int index = 0;
             char * mime;
             const char* extension = strchr(path, '.');
-            printf("extension:%s\n", extension);
             if (strcmp(extension, ".css") == 0) {
                 mime = "text/css";
             } else if (strcmp(extension, ".html") == 0 || strcmp(extension, ".htm") == 0) {
@@ -207,15 +201,21 @@ whileLoop: while(1) {
             }
 
             char *tmp = "HTTP/1.1 200 OK\r\nContent-Type: "; 
-            char *follow = ";\r\n\r\n";
-            char* response = malloc(strlen(tmp) + strlen(file_text) + strlen(mime) + strlen(follow) + 1);
-            strcpy(response, tmp);
-            strcat(response, mime);
-            strcat(response, follow);
-            strcat(response, file_text);
-            printf("Serving:content length-%li:Mime-%s\n", strlen(response), mime);
-            send(new_socket, response, strlen(response), 0);
-            if (file_text != NULL) free(file_text);
+            char *delim = "\r\n\r\n";
+            int start = strlen(tmp);
+            int mlen = strlen(mime);
+            long header_len = start + mlen + strlen(delim);
+            long resp_len = header_len + file_len;
+            char* response = malloc(resp_len);
+            memcpy(response, tmp, start);
+            memcpy(response + start, mime, mlen);
+            memcpy(response + start + mlen, delim, strlen(delim));
+            memcpy(response + header_len, file_data, file_len);
+            printf("Serving:header-%li:data-%li:total-%li:Mime-%s\n", header_len, file_len, resp_len, mime);
+
+            send(new_socket, response, resp_len, 0);
+
+            if (file_data != NULL) free(file_data);
             if (response != NULL) free(response);
         }
 
